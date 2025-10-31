@@ -1,0 +1,7 @@
+{
+    "name": "Nature Remo Climate",
+    "domains": ["hass_nature_remo_climate"],
+    "country": "JP",
+    "homeassistant": "2024.12.0",
+    "render_readme": true
+}

@@ -1,0 +1,11 @@
+{
+    "domain": "hass_nature_remo_climate",
+    "name": "Nature Remo Climate",
+    "version": "0.0.1",
+    "documentation": "https://github.com/tkfj/hass_nature_remo_climate",
+    "codeowners": ["@tkfj"],
+    "config_flow": true,
+    "integration_type": "hub",
+    "iot_class": "local_polling",
+    "loggers": ["custom_components.hass_nature_remo_climate"]
+    }
