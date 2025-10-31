@@ -1,35 +1,30 @@
 from __future__ import annotations
+from typing import Any
 
 from homeassistant.components.climate import (
     ClimateEntity,
     ClimateEntityFeature,
     HVACMode,
 )
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import UnitOfTemperature, ATTR_TEMPERATURE
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.core import callback
 
 from .const import DOMAIN, DEFAULT_NAME
+from .coordinator import RemoCoordinator
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    async_add_entities([NatureRemoClimate(entry.entry_id)])
+    coord: RemoCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([NatureRemoClimate(coord)])
 
 
 class NatureRemoClimate(ClimateEntity):
-    """属性だけ見せるダミーNature Remoエアコン。
-    - 動作は未実装（操作しても変化しない）
-    - モード/温度範囲/風量/左右スイングのみ属性表示
-    - 上下スイングは無視（auto固定扱いで属性には出さない）
-    """
 
     _attr_has_entity_name = True
     _attr_name = DEFAULT_NAME
-    _attr_unique_id: str
-
-    # 単位
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
-    # 表示用フラグ（操作は無効）
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.FAN_MODE
@@ -38,7 +33,6 @@ class NatureRemoClimate(ClimateEntity):
         | ClimateEntityFeature.TURN_OFF
     )
 
-    # モード：自動(heat_cool), 送風, 冷房, 除湿, 暖房
     _attr_hvac_modes = [
         HVACMode.OFF,
         HVACMode.HEAT_COOL,
@@ -48,34 +42,43 @@ class NatureRemoClimate(ClimateEntity):
         HVACMode.HEAT,
     ]
 
-    # 風量（オート + 1〜5）
     _attr_fan_modes = ["auto", "1", "2", "3", "4", "5"]
 
-    # 左右スイング：1(左) / 2(中央) / 3(右) / swing
-    _attr_swing_horizontal_modes = ["left", "center", "right", "swing"]
+    _attr_swing_horizontal_modes = ["1", "2", "3", "swing"]
 
-    # 表示上の現在値
-    _current_hvac_mode = HVACMode.HEAT_COOL
-    _current_swing_horizontal_mode = "center"
-    _current_fan_mode = "auto"
-    _current_target_temperature = 18.5
-    _current_temperature = 22.3
+    _attr_target_temperature_step = 0.5
 
-    def __init__(self, unique_suffix: str) -> None:
-        self._attr_unique_id = f"{DOMAIN}-{unique_suffix}"
+    def __init__(self, coordinator: RemoCoordinator) -> None:
+        self.coordinator = coordinator
+        self._attr_unique_id = f"{DOMAIN}-{coordinator.appliance_id}"
 
-    # デバイス情報
+        # UIに何か出すための初期値（API到着前）
+        self._current_hvac_mode = HVACMode.OFF
+        self._current_fan_mode = "auto"
+        self._current_swing_horizontal_mode = "2"
+        self._current_temperature = None
+        self._current_target_temperature = None
+
+        # 初回データを反映
+        self._update_from_coordinator()
+
+    # ========== HA 標準プロパティ ==========
     @property
     def device_info(self) -> DeviceInfo:
+        data = self.coordinator.data or {}
+        model = (data.get("model") or {}).get("name", "AC")
+        manufacturer = (data.get("device") or {}).get("manufacturer", "Nature")
+        name = data.get("nickname", DEFAULT_NAME)
         return DeviceInfo(
             identifiers={(DOMAIN, self._attr_unique_id)},
-            name=DEFAULT_NAME,
-            manufacturer="Demo",
-            model="NatureRemo-AC",
+            name=name,
+            manufacturer=manufacturer,
+            model=model,
         )
 
+
     @property
-    def current_temperature(self) -> float:
+    def current_temperature(self) -> float | None:
         return self._current_temperature
 
     @property
@@ -87,11 +90,11 @@ class NatureRemoClimate(ClimateEntity):
         return self._current_hvac_mode
 
     @property
-    def swing_horizontal_mode(self) -> str:
+    def swing_horizontal_mode(self) -> str | None:
         return self._current_swing_horizontal_mode
 
     @property
-    def fan_mode(self) -> str:
+    def fan_mode(self) -> str | None:
         return self._current_fan_mode
 
     @property
@@ -104,15 +107,14 @@ class NatureRemoClimate(ClimateEntity):
 
     @property
     def available(self) -> bool:
-        return True
+        return self.coordinator.last_update_success
 
     @property
     def should_poll(self) -> bool:
         return False
 
-    # 追加属性（上下スイングは出さない）
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "temperature_constraints": {
                 "cool": {"min": 18, "max": 32},
@@ -121,35 +123,30 @@ class NatureRemoClimate(ClimateEntity):
                 "dry": {"min": 15, "max": 32},
                 "fan_only": None,
             },
-            "note": "Display-only stub. Vertical swing ignored; horizontal swing mapped to swing_mode.",
+            "note": "Display-only. Values are fetched from Nature Remo API; no control yet.",
         }
 
-    # ---- 操作（ダミー：表示だけ合わせる。実制御なし）----
+    # ========== 表示だけ更新（制御はしない） ==========
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode in self._attr_hvac_modes:
             self._current_hvac_mode = hvac_mode
             self.async_write_ha_state()
 
     async def async_set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
-        if swing_mode in self._attr_swing_horizontal_modes:
+        if swing_horizontal_mode in self._attr_swing_horizontal_modes:
             self._current_swing_horizontal_mode = swing_horizontal_mode
             self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs) -> None:
         if (t := kwargs.get(ATTR_TEMPERATURE)) is None:
             return
-
-        # モード別の簡易制約
-        min_v, max_v = 15.0, 32.0
-        if self._current_hvac_mode == HVACMode.COOL:
-            min_v = 18.0
-
         try:
             v = float(t)
         except (TypeError, ValueError):
             return
-
-        v = max(min_v, min(max_v, v))  # クランプ
+        # 表示のためだけにクランプ
+        min_v = 18.0 if self._current_hvac_mode == HVACMode.COOL else 15.0
+        v = max(min_v, min(32.0, v))
         self._current_target_temperature = v
         self.async_write_ha_state()
 
@@ -157,3 +154,55 @@ class NatureRemoClimate(ClimateEntity):
         if fan_mode in self._attr_fan_modes:
             self._current_fan_mode = fan_mode
             self.async_write_ha_state()
+
+    # ========== Coordinator → Entity 反映 ==========
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._update_from_coordinator()
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+
+    def _update_from_coordinator(self) -> None:
+        """Coordinatorの /appliances 1件データから現在値を抽出"""
+        data = self.coordinator.data or {}
+        settings = data.get("settings") or {}
+        newest = data.get("newest_events") or {}
+
+        # 現在温度（te.val）
+        te = (newest.get("te") or {}).get("val")
+        try:
+            self._current_temperature = float(te) if te is not None else None
+        except (TypeError, ValueError):
+            self._current_temperature = None
+
+        # 目標温度（settings.temp）
+        temp = settings.get("temp")
+        try:
+            self._current_target_temperature = float(temp) if temp is not None else None
+        except (TypeError, ValueError):
+            self._current_target_temperature = None
+
+        # モード
+        mode = (settings.get("mode") or "").lower()
+        button = (settings.get("button") or "").lower()
+        if button == "power-off":
+            self._current_hvac_mode = HVACMode.OFF
+        else:
+            self._current_hvac_mode = {
+                "cool": HVACMode.COOL,
+                "warm": HVACMode.HEAT,
+                "dry": HVACMode.DRY,
+                "auto": HVACMode.HEAT_COOL,
+                "blow": HVACMode.FAN_ONLY,
+                "off": HVACMode.OFF,
+            }.get(mode, HVACMode.OFF)
+
+        vol = (settings.get("vol") or "").lower()
+        self._current_fan_mode = vol if vol in self._attr_fan_modes else "auto"
+
+        dirh = (settings.get("dirh") or "").lower()
+        self._current_swing_horizontal_mode = dirh if dirh in self._attr_swing_horizontal_modes else "2"
