@@ -58,23 +58,32 @@ class NatureRemoApi:
         )
 
     async def async_set_temperature(self, appliance_id: str, temp_c: float) -> None:
-        # 整数文字列が安定
+        """温度を0.5℃単位で設定（整数は小数点なし）"""
+        # 0.5単位に丸め
+        rounded = round(temp_c * 2) / 2
+        # .0 は付けない
+        temp_str = str(int(rounded)) if rounded.is_integer() else str(rounded)
         await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
-            data={"temperature": str(int(round(temp_c)))},
+            data={"temperature": temp_str},
         )
 
     async def async_set_fan(self, appliance_id: str, fan: str) -> None:
-        # "auto" | "1".."5" を想定
         await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"air_volume": fan},
         )
 
-    async def async_set_swing_horizontal(self, appliance_id: str, swing: str) -> None:
-        # 左右スイングを air_direction にマップ: "1"|"2"|"3"|"swing"
+    async def async_set_swing_horizontal(self, appliance_id: str, swing_horizontal: str) -> None:
+        await self._req(
+            "POST",
+            f"/appliances/{appliance_id}/aircon_settings",
+            data={"air_direction_h": swing_horizontal},
+        )
+
+    async def async_set_swing(self, appliance_id: str, swing: str) -> None:
         await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",

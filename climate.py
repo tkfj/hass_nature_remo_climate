@@ -43,33 +43,36 @@ REMO_HVAC_MODES = {
 }
 REMO_FAN_OPTIONS = ["auto", "1", "2", "3", "4", "5"]
 REMO_SWING_H_OPTIONS = ["1", "2", "3", "swing"]
-
+REMO_SWING_OPTIONS = ["1", "2", "3", "4", "5", "auto", "swing"]
+REMO_TEMPERATURE_CONSTRAINTS = {
+    "cool": {"min": 18, "max": 32},
+    "heat": {"min": 15, "max": 32},
+    "heat_cool": {"min": -2, "max": 2},
+    "dry": {"min": -2, "max": 2},
+    "fan_only": None,
+}
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coord: RemoCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([NatureRemoClimate(coord, entry.data)], True)
-
 
 class NatureRemoClimate(ClimateEntity):
 
     _attr_has_entity_name = True
     _attr_name = DEFAULT_NAME
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
-
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.FAN_MODE
         | ClimateEntityFeature.SWING_HORIZONTAL_MODE
+        | ClimateEntityFeature.SWING_MODE
         | ClimateEntityFeature.TURN_ON
         | ClimateEntityFeature.TURN_OFF
     )
-
     _attr_hvac_modes = REMO_HVAC_MODES
-
     _attr_fan_modes = REMO_FAN_OPTIONS
-
     _attr_swing_horizontal_modes = REMO_SWING_H_OPTIONS
-
+    _attr_swing_modes = REMO_SWING_OPTIONS
     _attr_target_temperature_step = 0.5
 
     def __init__(self, coordinator: RemoCoordinator, data: dict) -> None:
@@ -81,8 +84,8 @@ class NatureRemoClimate(ClimateEntity):
         # 初期表示値
         self._current_hvac_mode = HVACMode.OFF
         self._current_fan_mode = "auto"
+        self._current_swing_mode = "auto"
         self._current_swing_horizontal_mode = "2"
-        self._current_temperature = None
         self._current_target_temperature = None
 
         self._update_from_coordinator()
@@ -112,6 +115,9 @@ class NatureRemoClimate(ClimateEntity):
     def swing_horizontal_mode(self) -> str | None: return self._current_swing_horizontal_mode
 
     @property
+    def swing_mode(self) -> str | None: return self._current_swing_mode
+
+    @property
     def fan_mode(self) -> str | None: return self._current_fan_mode
 
     @property
@@ -129,13 +135,7 @@ class NatureRemoClimate(ClimateEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
-            "temperature_constraints": {
-                "cool": {"min": 18, "max": 32},
-                "heat": {"min": 15, "max": 32},
-                "heat_cool": {"min": -2, "max": 2},
-                "dry": {"min": 15, "max": 32},
-                "fan_only": None,
-            }
+            "temperature_constraints": REMO_TEMPERATURE_CONSTRAINTS
         }
 
     # ========= 操作（POST → 反映） =========
@@ -165,6 +165,18 @@ class NatureRemoClimate(ClimateEntity):
             _LOGGER.warning("Failed to set swing_horizontal: %s", e)
             return
         self._current_swing_horizontal_mode = swing_horizontal_mode
+        await self.coordinator.async_request_refresh()
+        self.async_write_ha_state()
+
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        if swing_mode not in self._attr_swing_modes:
+            return
+        try:
+            await self._api.async_set_swing(self._appliance_id, swing_mode)
+        except (RemoAuthError, RemoConnectionError) as e:
+            _LOGGER.warning("Failed to set swing: %s", e)
+            return
+        self._current_swing_mode = swing_mode
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
@@ -229,12 +241,6 @@ class NatureRemoClimate(ClimateEntity):
         settings = data.get("settings") or {}
         newest = data.get("newest_events") or {}
 
-        te = (newest.get("te") or {}).get("val")
-        try:
-            self._current_temperature = float(te) if te is not None else None
-        except (TypeError, ValueError):
-            self._current_temperature = None
-
         temp = settings.get("temp")
         try:
             self._current_target_temperature = float(temp) if temp is not None else None
@@ -253,3 +259,6 @@ class NatureRemoClimate(ClimateEntity):
 
         dirh = (settings.get("dirh") or "").lower()
         self._current_swing_horizontal_mode = dirh if dirh in REMO_SWING_H_OPTIONS else self._current_swing_horizontal_mode
+
+        dir = (settings.get("dir") or "").lower()
+        self._current_swing_mode = dir if dir in REMO_SWING_OPTIONS else self._current_swing_mode
