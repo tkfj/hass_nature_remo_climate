@@ -18,38 +18,38 @@ from .api import NatureRemoApi, RemoAuthError, RemoConnectionError
 _LOGGER = logging.getLogger(__name__)
 
 HVAC_TO_REMO = {
+    HVACMode.OFF: "off",
     HVACMode.HEAT_COOL: "auto",
     HVACMode.HEAT: "warm",
     HVACMode.COOL: "cool",
     HVACMode.DRY: "dry",
     HVACMode.FAN_ONLY: "blow",
-    HVACMode.OFF: "off",
 }
 REMO_TO_HVAC = {
+    "off": HVACMode.OFF,
     "auto": HVACMode.HEAT_COOL,
     "warm": HVACMode.HEAT,
     "cool": HVACMode.COOL,
     "dry": HVACMode.DRY,
     "blow": HVACMode.FAN_ONLY,
-    "off": HVACMode.OFF,
 }
-REMO_HVAC_MODES = {
+REMO_HVAC_MODES = [
+    HVACMode.OFF,
     HVACMode.HEAT_COOL,
     HVACMode.HEAT,
     HVACMode.COOL,
     HVACMode.DRY,
     HVACMode.FAN_ONLY,
-    HVACMode.OFF,
-}
+]
 REMO_FAN_OPTIONS = ["auto", "1", "2", "3", "4", "5"]
 REMO_SWING_H_OPTIONS = ["1", "2", "3", "swing"]
 REMO_SWING_OPTIONS = ["1", "2", "3", "4", "5", "auto", "swing"]
 REMO_TEMPERATURE_CONSTRAINTS = {
-    "cool": {"min": 18, "max": 32},
-    "heat": {"min": 15, "max": 32},
-    "heat_cool": {"min": -2, "max": 2},
-    "dry": {"min": -2, "max": 2},
-    "fan_only": None,
+    HVACMode.HEAT_COOL: (-2, 2),
+    HVACMode.HEAT: (15, 32),
+    HVACMode.COOL: (18, 32),
+    HVACMode.DRY: (-2, 2),
+    HVACMode.FAN_ONLY: (None, None),
 }
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -104,7 +104,6 @@ class NatureRemoClimate(ClimateEntity):
             model=model,
         )
 
-
     @property
     def target_temperature(self) -> float | None: return self._current_target_temperature
 
@@ -121,22 +120,16 @@ class NatureRemoClimate(ClimateEntity):
     def fan_mode(self) -> str | None: return self._current_fan_mode
 
     @property
-    def min_temp(self) -> float: return 15.0
+    def min_temp(self) -> float: return REMO_TEMPERATURE_CONSTRAINTS.get(self._current_hvac_mode,(15,32,))[0]
 
     @property
-    def max_temp(self) -> float: return 32.0
+    def max_temp(self) -> float: return REMO_TEMPERATURE_CONSTRAINTS.get(self._current_hvac_mode,(15,32,))[1]
 
     @property
     def available(self) -> bool: return self.coordinator.last_update_success
 
     @property
     def should_poll(self) -> bool: return False
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {
-            "temperature_constraints": REMO_TEMPERATURE_CONSTRAINTS
-        }
 
     # ========= 操作（POST → 反映） =========
 
@@ -183,12 +176,16 @@ class NatureRemoClimate(ClimateEntity):
     async def async_set_temperature(self, **kwargs) -> None:
         if (t := kwargs.get(ATTR_TEMPERATURE)) is None:
             return
-        # モード別の下限だけ軽くクランプ
-        min_v = 18.0 if self._current_hvac_mode == HVACMode.COOL else 15.0
         try:
-            v = max(min_v, min(32.0, float(t)))
+            v = float(t)
         except (TypeError, ValueError):
             return
+        v = round(v * 2) / 2
+        _l,_h = REMO_TEMPERATURE_CONSTRAINTS.get(self._current_hvac_mode,(15,32,))
+        if _l is not None:
+            v = max(_l, v)
+        if _h is not None:
+            v = min(_h, v)
         try:
             await self._api.async_set_temperature(self._appliance_id, v)
         except (RemoAuthError, RemoConnectionError) as e:
@@ -239,7 +236,6 @@ class NatureRemoClimate(ClimateEntity):
     def _update_from_coordinator(self) -> None:
         data = self.coordinator.data or {}
         settings = data.get("settings") or {}
-        newest = data.get("newest_events") or {}
 
         temp = settings.get("temp")
         try:

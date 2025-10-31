@@ -47,7 +47,7 @@ class NatureRemoApi:
         await self._req("POST", f"/appliances/{appliance_id}/aircon_settings", data=data)
 
     async def async_set_mode(self, appliance_id: str, mode: str) -> None:
-        # mode: "cool" | "warm" | "heat" | "dry" | "auto" | "off"
+        # mode: "off" | "auto" | "warm" | "cool" | "dry" | "blow"
         if mode == "off":
             await self.async_set_power(appliance_id, False)
             return
