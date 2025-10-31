@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any
+from typing import Any, List
 import logging
 
 from homeassistant.components.climate import (
@@ -69,11 +69,6 @@ class NatureRemoClimate(ClimateEntity):
         | ClimateEntityFeature.TURN_ON
         | ClimateEntityFeature.TURN_OFF
     )
-    _attr_hvac_modes = REMO_HVAC_MODES
-    _attr_fan_modes = REMO_FAN_OPTIONS
-    _attr_swing_horizontal_modes = REMO_SWING_H_OPTIONS
-    _attr_swing_modes = REMO_SWING_OPTIONS
-    _attr_target_temperature_step = 0.5
 
     def __init__(self, coordinator: RemoCoordinator, data: dict) -> None:
         self.coordinator = coordinator
@@ -126,6 +121,21 @@ class NatureRemoClimate(ClimateEntity):
     def max_temp(self) -> float: return REMO_TEMPERATURE_CONSTRAINTS.get(self._current_hvac_mode,(15,32,))[1]
 
     @property
+    def hvac_modes(self) -> List[HVACMode]: return REMO_HVAC_MODES
+
+    @property
+    def fan_modes(self) -> List[str]: return REMO_FAN_OPTIONS if self._current_hvac_mode!=HVACMode.DRY else [""]
+
+    @property
+    def swing_horizontal_modes(self) -> List[str]: return REMO_SWING_H_OPTIONS
+
+    @property
+    def swing_modes(self) -> List[str]: return REMO_SWING_OPTIONS
+
+    @property
+    def target_temperature_step(self) -> float: return 0.5
+
+    @property
     def available(self) -> bool: return self.coordinator.last_update_success
 
     @property
@@ -134,7 +144,7 @@ class NatureRemoClimate(ClimateEntity):
     # ========= 操作（POST → 反映） =========
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        if hvac_mode not in self._attr_hvac_modes:
+        if hvac_mode not in self.hvac_modes:
             return
         target = HVAC_TO_REMO.get(hvac_mode, None)
         if target is None:
@@ -150,7 +160,7 @@ class NatureRemoClimate(ClimateEntity):
 
 
     async def async_set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
-        if swing_horizontal_mode not in self._attr_swing_horizontal_modes:
+        if swing_horizontal_mode not in self.swing_horizontal_modes:
             return
         try:
             await self._api.async_set_swing_horizontal(self._appliance_id, swing_horizontal_mode)
@@ -162,7 +172,7 @@ class NatureRemoClimate(ClimateEntity):
         self.async_write_ha_state()
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
-        if swing_mode not in self._attr_swing_modes:
+        if swing_mode not in self.swing_modes:
             return
         try:
             await self._api.async_set_swing(self._appliance_id, swing_mode)
@@ -196,7 +206,7 @@ class NatureRemoClimate(ClimateEntity):
         self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        if fan_mode not in self._attr_fan_modes:
+        if fan_mode not in self.fan_modes:
             return
         try:
             await self._api.async_set_fan(self._appliance_id, fan_mode)
