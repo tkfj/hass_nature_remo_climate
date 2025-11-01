@@ -46,7 +46,6 @@ class NatureRemoClimate(ClimateEntity):
         | ClimateEntityFeature.FAN_MODE
         | ClimateEntityFeature.SWING_HORIZONTAL_MODE
         | ClimateEntityFeature.SWING_MODE
-        | ClimateEntityFeature.TURN_ON
         | ClimateEntityFeature.TURN_OFF
     )
 
@@ -226,10 +225,6 @@ class NatureRemoClimate(ClimateEntity):
             return
         self._apply_settings(settings)
         self.async_write_ha_state()
-
-    async def async_turn_on(self) -> None:
-        hvac = self._current_hvac_mode if self._current_hvac_mode != HVACMode.OFF else HVACMode.HEAT_COOL
-        await self.async_set_hvac_mode(hvac)
 
     async def async_turn_off(self) -> None:
         try:

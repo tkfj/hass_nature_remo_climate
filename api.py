@@ -41,23 +41,22 @@ class NatureRemoApi:
 
     # ===== 制御系 =====
 
-    async def async_set_power(self, appliance_id: str, on: bool) -> None:
+    async def async_set_power(self, appliance_id: str, on: bool) -> Any:
         # Remoは電源OFFのみ明示的: button=power-off
         data = {"button": "power-off"} if not on else {}
         return await self._req("POST", f"/appliances/{appliance_id}/aircon_settings", data=data)
 
-    async def async_set_mode(self, appliance_id: str, mode: str) -> None:
+    async def async_set_mode(self, appliance_id: str, mode: str) -> Any:
         # mode: "off" | "auto" | "warm" | "cool" | "dry" | "blow"
         if mode == "off":
-            await self.async_set_power(appliance_id, False)
-            return
+            return await self.async_set_power(appliance_id, False)
         return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"operation_mode": mode},
         )
 
-    async def async_set_temperature(self, appliance_id: str, temp_c: float) -> None:
+    async def async_set_temperature(self, appliance_id: str, temp_c: float) -> Any:
         """温度を0.5℃単位で設定（整数は小数点なし）"""
         # 0.5単位に丸め
         rounded = round(temp_c * 2) / 2
@@ -69,21 +68,21 @@ class NatureRemoApi:
             data={"temperature": temp_str},
         )
 
-    async def async_set_fan(self, appliance_id: str, fan: str) -> None:
+    async def async_set_fan(self, appliance_id: str, fan: str) -> Any:
         return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"air_volume": fan},
         )
 
-    async def async_set_swing_horizontal(self, appliance_id: str, swing_horizontal: str) -> None:
+    async def async_set_swing_horizontal(self, appliance_id: str, swing_horizontal: str) -> Any:
         return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"air_direction_h": swing_horizontal},
         )
 
-    async def async_set_swing(self, appliance_id: str, swing: str) -> None:
+    async def async_set_swing(self, appliance_id: str, swing: str) -> Any:
         return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
