@@ -33,31 +33,11 @@ REMO_TO_HVAC = {
     "dry": HVACMode.DRY,
     "blow": HVACMode.FAN_ONLY,
 }
-REMO_HVAC_MODES = [
-    HVACMode.OFF,
-    HVACMode.HEAT_COOL,
-    HVACMode.HEAT,
-    HVACMode.COOL,
-    HVACMode.DRY,
-    HVACMode.FAN_ONLY,
-]
-REMO_FAN_OPTIONS = ["auto", "1", "2", "3", "4", "5"]
-REMO_SWING_H_OPTIONS = ["1", "2", "3", "swing"]
-REMO_SWING_OPTIONS = ["1", "2", "3", "4", "5", "auto", "swing"]
-REMO_TEMPERATURE_CONSTRAINTS = {
-    HVACMode.HEAT_COOL: (-2, 2),
-    HVACMode.HEAT: (15, 32),
-    HVACMode.COOL: (18, 32),
-    HVACMode.DRY: (-2, 2),
-    HVACMode.FAN_ONLY: (None, None),
-}
-
 async def async_setup_entry(hass, entry, async_add_entities):
     coord: RemoCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([NatureRemoClimate(coord, entry.data)], True)
+    async_add_entities([NatureRemoClimate(coord, entry.data, entry.options)], True)
 
 class NatureRemoClimate(ClimateEntity):
-
     _attr_has_entity_name = True
     _attr_name = DEFAULT_NAME
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
@@ -70,22 +50,37 @@ class NatureRemoClimate(ClimateEntity):
         | ClimateEntityFeature.TURN_OFF
     )
 
-    def __init__(self, coordinator: RemoCoordinator, data: dict) -> None:
+    def __init__(self, coordinator: RemoCoordinator, data: dict, options: dict) -> None:
         self.coordinator = coordinator
         self._attr_unique_id = f"{DOMAIN}-{coordinator.appliance_id}"
         self._api = NatureRemoApi(data[CONF_TOKEN])
         self._appliance_id = data[CONF_APPLIANCE_ID]
 
-        # 初期表示値
         self._current_hvac_mode = HVACMode.OFF
         self._current_fan_mode = "auto"
         self._current_swing_mode = "auto"
-        self._current_swing_horizontal_mode = "2"
+        self._current_swing_horizontal_mode = "swing"
+        self._current_temperature = None
         self._current_target_temperature = None
 
         self._update_from_coordinator()
 
-    # ========= 標準プロパティ =========
+    def _caps(self) -> dict:
+        return self.coordinator.entry.options.get("capabilities", {"modes": {}, "order": []})
+
+    def _mode_caps(self, mode: HVACMode) -> dict:
+        return self._caps().get("modes", {}).get(mode.value, {})
+
+    def _temp_bounds_for(self, mode: HVACMode) -> tuple[float, float]:
+        temps = self._mode_caps(mode).get("temp_list") or []
+        if temps:
+            if temps != [""]: # FAN_ONLYは空だがHASSの仕様上値を返さないとUIでモード操作時にエラーが出るのでフォールバックさせる
+                return (min(temps), max(temps))
+        # フォールバック（機種が空を返すケース）
+        if mode in (HVACMode.HEAT_COOL, HVACMode.DRY):
+            return (-2.0, 2.0)
+        return (18, 32)
+
     @property
     def device_info(self) -> DeviceInfo:
         data = self.coordinator.data or {}
@@ -100,37 +95,58 @@ class NatureRemoClimate(ClimateEntity):
         )
 
     @property
-    def target_temperature(self) -> float | None: return self._current_target_temperature
+    def target_temperature(self) -> float | None: return self._current_target_temperature if self._current_hvac_mode != HVACMode.OFF else None
 
     @property
     def hvac_mode(self) -> HVACMode: return self._current_hvac_mode
 
     @property
-    def swing_horizontal_mode(self) -> str | None: return self._current_swing_horizontal_mode
+    def swing_horizontal_mode(self) -> str | None: return self._current_swing_horizontal_mode if self._current_hvac_mode != HVACMode.OFF else ""
 
     @property
-    def swing_mode(self) -> str | None: return self._current_swing_mode
+    def swing_mode(self) -> str | None: return self._current_swing_mode if self._current_hvac_mode != HVACMode.OFF else ""
 
     @property
-    def fan_mode(self) -> str | None: return self._current_fan_mode
+    def fan_mode(self) -> str | None: return self._current_fan_mode if self._current_hvac_mode != HVACMode.OFF else ""
 
     @property
-    def min_temp(self) -> float: return REMO_TEMPERATURE_CONSTRAINTS.get(self._current_hvac_mode,(15,32,))[0]
+    def min_temp(self) -> float: return self._temp_bounds_for(self._current_hvac_mode)[0]
 
     @property
-    def max_temp(self) -> float: return REMO_TEMPERATURE_CONSTRAINTS.get(self._current_hvac_mode,(15,32,))[1]
+    def max_temp(self) -> float: return self._temp_bounds_for(self._current_hvac_mode)[1]
 
     @property
-    def hvac_modes(self) -> List[HVACMode]: return REMO_HVAC_MODES
+    def current_temperature(self) -> float | None: return None  # 観測温度は使わない
 
     @property
-    def fan_modes(self) -> List[str]: return REMO_FAN_OPTIONS if self._current_hvac_mode!=HVACMode.DRY else [""]
+    def hvac_modes(self) -> List[HVACMode]:
+        result: list[HVACMode] = [HVACMode(k) for k in self._caps().get("order") or [] if k in HVAC_TO_REMO]
+        # 空になった場合のフォールバック
+        if not result:
+            result = [
+                HVACMode.OFF,
+                HVACMode.HEAT,
+                HVACMode.COOL,
+            ]
+        return result
 
     @property
-    def swing_horizontal_modes(self) -> List[str]: return REMO_SWING_H_OPTIONS
+    def fan_modes(self) -> List[str]:
+        caps = self._mode_caps(self._current_hvac_mode)
+        lst = caps.get("vol_list")
+        return lst or [""]
 
     @property
-    def swing_modes(self) -> List[str]: return REMO_SWING_OPTIONS
+    def swing_horizontal_modes(self) -> List[str]:
+        caps = self._mode_caps(self._current_hvac_mode)
+        lst = caps.get("dirh_list")
+        return lst or [""]
+
+    @property
+    def swing_modes(self) -> List[str]:
+        caps = self._mode_caps(self._current_hvac_mode)
+        lst = caps.get("dir_list")
+        return lst or [""]
 
     @property
     def target_temperature_step(self) -> float: return 0.5
@@ -141,12 +157,10 @@ class NatureRemoClimate(ClimateEntity):
     @property
     def should_poll(self) -> bool: return False
 
-    # ========= 操作（POST → 反映） =========
-
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode not in self.hvac_modes:
             return
-        target = HVAC_TO_REMO.get(hvac_mode, None)
+        target = HVAC_TO_REMO.get(hvac_mode)
         if target is None:
             return
         try:
@@ -155,9 +169,15 @@ class NatureRemoClimate(ClimateEntity):
             _LOGGER.warning("Failed to set hvac_mode: %s", e)
             return
         self._current_hvac_mode = hvac_mode
+
+        # 既存ターゲット温度が新レンジ外なら丸め・クランプ
+        if self._current_target_temperature is not None:
+            lo, hi = self._temp_bounds_for(self._current_hvac_mode)
+            v = round(float(self._current_target_temperature) * 2) / 2
+            self._current_target_temperature = max(lo, min(hi, v))
+
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
-
 
     async def async_set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
         if swing_horizontal_mode not in self.swing_horizontal_modes:
@@ -190,8 +210,9 @@ class NatureRemoClimate(ClimateEntity):
             v = float(t)
         except (TypeError, ValueError):
             return
+        # 能力表のレンジで丸め・クランプ
+        lo, hi = self._temp_bounds_for(self._current_hvac_mode)
         v = round(v * 2) / 2
-        _l,_h = REMO_TEMPERATURE_CONSTRAINTS.get(self._current_hvac_mode,(15,32,))
         if _l is not None:
             v = max(_l, v)
         if _h is not None:
@@ -218,7 +239,6 @@ class NatureRemoClimate(ClimateEntity):
         self.async_write_ha_state()
 
     async def async_turn_on(self) -> None:
-        # ONは“何かしらの設定POST”で成立。ここでは現在モードを再送（OFF時はAUTOにして送る）
         hvac = self._current_hvac_mode if self._current_hvac_mode != HVACMode.OFF else HVACMode.HEAT_COOL
         await self.async_set_hvac_mode(hvac)
 
@@ -232,7 +252,6 @@ class NatureRemoClimate(ClimateEntity):
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
-    # ========= Coordinator → Entity =========
     @callback
     def _handle_coordinator_update(self) -> None:
         self._update_from_coordinator()
@@ -249,7 +268,7 @@ class NatureRemoClimate(ClimateEntity):
 
         temp = settings.get("temp")
         try:
-            self._current_target_temperature = float(temp) if temp is not None else None
+            self._current_target_temperature = float(temp) if temp not in (None, "") else None
         except (TypeError, ValueError):
             self._current_target_temperature = None
 
@@ -261,10 +280,13 @@ class NatureRemoClimate(ClimateEntity):
             self._current_hvac_mode = REMO_TO_HVAC.get(mode, self._current_hvac_mode)
 
         vol = (settings.get("vol") or "").lower()
-        self._current_fan_mode = vol if vol in REMO_FAN_OPTIONS else self._current_fan_mode
+        if vol in self.fan_modes:
+            self._current_fan_mode = vol
 
         dirh = (settings.get("dirh") or "").lower()
-        self._current_swing_horizontal_mode = dirh if dirh in REMO_SWING_H_OPTIONS else self._current_swing_horizontal_mode
+        if dirh in self.swing_horizontal_mode:
+            self._current_swing_horizontal_mode = dirh
 
         dir = (settings.get("dir") or "").lower()
-        self._current_swing_mode = dir if dir in REMO_SWING_OPTIONS else self._current_swing_mode
+        if dir in self.swing_mode:
+            self._current_swing_mode = dir
