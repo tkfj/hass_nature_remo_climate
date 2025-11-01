@@ -44,14 +44,14 @@ class NatureRemoApi:
     async def async_set_power(self, appliance_id: str, on: bool) -> None:
         # Remoは電源OFFのみ明示的: button=power-off
         data = {"button": "power-off"} if not on else {}
-        await self._req("POST", f"/appliances/{appliance_id}/aircon_settings", data=data)
+        return await self._req("POST", f"/appliances/{appliance_id}/aircon_settings", data=data)
 
     async def async_set_mode(self, appliance_id: str, mode: str) -> None:
         # mode: "off" | "auto" | "warm" | "cool" | "dry" | "blow"
         if mode == "off":
             await self.async_set_power(appliance_id, False)
             return
-        await self._req(
+        return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"operation_mode": mode},
@@ -63,28 +63,28 @@ class NatureRemoApi:
         rounded = round(temp_c * 2) / 2
         # .0 は付けない
         temp_str = str(int(rounded)) if rounded.is_integer() else str(rounded)
-        await self._req(
+        return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"temperature": temp_str},
         )
 
     async def async_set_fan(self, appliance_id: str, fan: str) -> None:
-        await self._req(
+        return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"air_volume": fan},
         )
 
     async def async_set_swing_horizontal(self, appliance_id: str, swing_horizontal: str) -> None:
-        await self._req(
+        return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"air_direction_h": swing_horizontal},
         )
 
     async def async_set_swing(self, appliance_id: str, swing: str) -> None:
-        await self._req(
+        return await self._req(
             "POST",
             f"/appliances/{appliance_id}/aircon_settings",
             data={"air_direction": swing},

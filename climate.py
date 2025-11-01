@@ -66,7 +66,7 @@ class NatureRemoClimate(ClimateEntity):
         self._update_from_coordinator()
 
     def _caps(self) -> dict:
-        return self.coordinator.entry.options.get("capabilities", {"modes": {}, "order": []})
+        return self.coordinator.capabilities or {"modes": {}, "order": []}
 
     def _mode_caps(self, mode: HVACMode) -> dict:
         return self._caps().get("modes", {}).get(mode.value, {})
@@ -164,43 +164,33 @@ class NatureRemoClimate(ClimateEntity):
         if target is None:
             return
         try:
-            await self._api.async_set_mode(self._appliance_id, target)
+            settings = await self._api.async_set_mode(self._appliance_id, target)
         except (RemoAuthError, RemoConnectionError) as e:
             _LOGGER.warning("Failed to set hvac_mode: %s", e)
             return
-        self._current_hvac_mode = hvac_mode
-
-        # 既存ターゲット温度が新レンジ外なら丸め・クランプ
-        if self._current_target_temperature is not None:
-            lo, hi = self._temp_bounds_for(self._current_hvac_mode)
-            v = round(float(self._current_target_temperature) * 2) / 2
-            self._current_target_temperature = max(lo, min(hi, v))
-
-        await self.coordinator.async_request_refresh()
+        self._apply_settings(settings)
         self.async_write_ha_state()
 
     async def async_set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
         if swing_horizontal_mode not in self.swing_horizontal_modes:
             return
         try:
-            await self._api.async_set_swing_horizontal(self._appliance_id, swing_horizontal_mode)
+            settings = await self._api.async_set_swing_horizontal(self._appliance_id, swing_horizontal_mode)
         except (RemoAuthError, RemoConnectionError) as e:
             _LOGGER.warning("Failed to set swing_horizontal: %s", e)
             return
-        self._current_swing_horizontal_mode = swing_horizontal_mode
-        await self.coordinator.async_request_refresh()
+        self._apply_settings(settings)
         self.async_write_ha_state()
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         if swing_mode not in self.swing_modes:
             return
         try:
-            await self._api.async_set_swing(self._appliance_id, swing_mode)
+            settings = await self._api.async_set_swing(self._appliance_id, swing_mode)
         except (RemoAuthError, RemoConnectionError) as e:
             _LOGGER.warning("Failed to set swing: %s", e)
             return
-        self._current_swing_mode = swing_mode
-        await self.coordinator.async_request_refresh()
+        self._apply_settings(settings)
         self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs) -> None:
@@ -211,31 +201,29 @@ class NatureRemoClimate(ClimateEntity):
         except (TypeError, ValueError):
             return
         # 能力表のレンジで丸め・クランプ
-        lo, hi = self._temp_bounds_for(self._current_hvac_mode)
+        _l, _h = self._temp_bounds_for(self._current_hvac_mode)
         v = round(v * 2) / 2
         if _l is not None:
             v = max(_l, v)
         if _h is not None:
             v = min(_h, v)
         try:
-            await self._api.async_set_temperature(self._appliance_id, v)
+            settings = await self._api.async_set_temperature(self._appliance_id, v)
         except (RemoAuthError, RemoConnectionError) as e:
             _LOGGER.warning("Failed to set temperature: %s", e)
             return
-        self._current_target_temperature = v
-        await self.coordinator.async_request_refresh()
+        self._apply_settings(settings)
         self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         if fan_mode not in self.fan_modes:
             return
         try:
-            await self._api.async_set_fan(self._appliance_id, fan_mode)
+            settings = await self._api.async_set_fan(self._appliance_id, fan_mode)
         except (RemoAuthError, RemoConnectionError) as e:
             _LOGGER.warning("Failed to set fan: %s", e)
             return
-        self._current_fan_mode = fan_mode
-        await self.coordinator.async_request_refresh()
+        self._apply_settings(settings)
         self.async_write_ha_state()
 
     async def async_turn_on(self) -> None:
@@ -244,12 +232,11 @@ class NatureRemoClimate(ClimateEntity):
 
     async def async_turn_off(self) -> None:
         try:
-            await self._api.async_set_power(self._appliance_id, False)
+            settings = await self._api.async_set_power(self._appliance_id, False)
         except (RemoAuthError, RemoConnectionError) as e:
             _LOGGER.warning("Failed to power off: %s", e)
             return
-        self._current_hvac_mode = HVACMode.OFF
-        await self.coordinator.async_request_refresh()
+        self._apply_settings(settings)
         self.async_write_ha_state()
 
     @callback
@@ -265,7 +252,9 @@ class NatureRemoClimate(ClimateEntity):
     def _update_from_coordinator(self) -> None:
         data = self.coordinator.data or {}
         settings = data.get("settings") or {}
+        self._apply_settings(settings)
 
+    def _apply_settings(self, settings: dict) -> None:
         temp = settings.get("temp")
         try:
             self._current_target_temperature = float(temp) if temp not in (None, "") else None
@@ -277,16 +266,13 @@ class NatureRemoClimate(ClimateEntity):
         if button == "power-off":
             self._current_hvac_mode = HVACMode.OFF
         else:
-            self._current_hvac_mode = REMO_TO_HVAC.get(mode, self._current_hvac_mode)
+            self._current_hvac_mode = REMO_TO_HVAC.get(mode)
 
         vol = (settings.get("vol") or "").lower()
-        if vol in self.fan_modes:
-            self._current_fan_mode = vol
+        self._current_fan_mode = vol
 
         dirh = (settings.get("dirh") or "").lower()
-        if dirh in self.swing_horizontal_mode:
-            self._current_swing_horizontal_mode = dirh
+        self._current_swing_horizontal_mode = dirh
 
         dir = (settings.get("dir") or "").lower()
-        if dir in self.swing_mode:
-            self._current_swing_mode = dir
+        self._current_swing_mode = dir

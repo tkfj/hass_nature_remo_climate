@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any, Dict, List
 import logging
+from copy import deepcopy
 
 from homeassistant.core import HomeAssistant
 from homeassistant.components.climate import HVACMode
@@ -11,7 +12,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import DOMAIN, CONF_TOKEN, CONF_APPLIANCE_ID
 from .api import NatureRemoApi, RemoAuthError, RemoConnectionError
 
-_LOGGER = logging.getLogger("custom_components.hass_nature_remo_climate")
+_LOGGER = logging.getLogger(__name__)
 _mode_sort = [
     HVACMode.OFF,
     HVACMode.HEAT_COOL,
@@ -25,7 +26,7 @@ def _mode_sort_key(_x):
     return _mode_sort.index(_m) if _m in _mode_sort else 99999999
 
 def _build_capabilities(ac: dict) -> Dict[str, Any]:
-    """/appliances の 1 AC データから機能レンジを抽出し、HA 用に正規化して保存可能にする。"""
+    """ /appliances の1ACから能力表を抽出し、HA用に正規化 """
     modes = (((ac.get("aircon") or {}).get("range") or {}).get("modes") or {})
     # Remo表記 → HA表記
     map_mode = {
@@ -79,19 +80,24 @@ def _build_capabilities(ac: dict) -> Dict[str, Any]:
 
 
 class RemoCoordinator(DataUpdateCoordinator[dict | None]):
-    """Fetch one AC appliance snapshot via Nature Remo Cloud API (read-only)."""
+    """/appliances を叩いて指定ACの最新スナップショット＋能力表（メモリ保持のみ）"""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
         self.entry = entry
         self.api = NatureRemoApi(entry.data[CONF_TOKEN])
         self.appliance_id = entry.data[CONF_APPLIANCE_ID]
+        self._capabilities: Dict[str, Any] | None = None
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}-coordinator",
             update_interval=timedelta(seconds=60),
         )
+
+    @property
+    def capabilities(self) -> Dict[str, Any] | None:
+        return self._capabilities
 
     async def _async_update_data(self) -> dict | None:
         try:
@@ -105,13 +111,10 @@ class RemoCoordinator(DataUpdateCoordinator[dict | None]):
         if not ac:
             raise UpdateFailed("Appliance not found")
 
-        # 初回のみ能力表を options に保存（以降は不変）
-        if "capabilities" not in self.entry.options:
-            caps = _build_capabilities(ac)
-            new_opts = dict(self.entry.options)
-            new_opts["capabilities"] = caps
-            # 非同期で options を更新（リロード不要）
-            self.hass.config_entries.async_update_entry(self.entry, options=new_opts)
-            _LOGGER.debug("Saved capabilities to options: %s", caps)
+        # 毎回、能力表を構築して差分があれば更新（=再起動時は当然取り直す）
+        new_caps = _build_capabilities(ac)
+        if self._capabilities != new_caps:
+            self._capabilities = deepcopy(new_caps)
+            _LOGGER.debug("Capabilities updated (in-memory): %s", self._capabilities)
 
         return ac
