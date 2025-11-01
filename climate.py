@@ -62,6 +62,7 @@ class NatureRemoClimate(ClimateEntity):
         self._current_swing_horizontal_mode = "swing"
         self._current_temperature = None
         self._current_target_temperature = None
+        self._current_observed_temperature = None
 
         self._update_from_coordinator()
 
@@ -116,7 +117,7 @@ class NatureRemoClimate(ClimateEntity):
     def max_temp(self) -> float: return self._temp_bounds_for(self._current_hvac_mode)[1]
 
     @property
-    def current_temperature(self) -> float | None: return None  # 観測温度は使わない
+    def current_temperature(self) -> float | None: return self._current_observed_temperature
 
     @property
     def hvac_modes(self) -> List[HVACMode]:
@@ -251,8 +252,17 @@ class NatureRemoClimate(ClimateEntity):
 
     def _update_from_coordinator(self) -> None:
         data = self.coordinator.data or {}
-        settings = data.get("settings") or {}
+        settings = data.get("ac",{}).get("settings") or {}
+        events = data.get("bridge",{}).get("newest_events") or {}
+        self._apply_bridge_events(events)
         self._apply_settings(settings)
+
+    def _apply_bridge_events(self, events: dict) -> None:
+        temp = events.get("te", {}).get("val")
+        try:
+            self._current_observed_temperature = float(temp) if temp not in (None, "") else None
+        except (TypeError, ValueError):
+            self._current_observed_temperature = None
 
     def _apply_settings(self, settings: dict) -> None:
         temp = settings.get("temp")

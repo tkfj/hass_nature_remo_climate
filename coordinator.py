@@ -107,14 +107,26 @@ class RemoCoordinator(DataUpdateCoordinator[dict | None]):
         except RemoConnectionError as e:
             raise UpdateFailed(f"Connection error: {e}") from e
 
-        ac = next((a for a in apps if a.get("id") == self.appliance_id), None)
-        if not ac:
+        apps_ac = next((a for a in apps if a.get("id") == self.appliance_id), None)
+        if not apps_ac:
             raise UpdateFailed("Appliance not found")
 
         # 毎回、能力表を構築して差分があれば更新（=再起動時は当然取り直す）
-        new_caps = _build_capabilities(ac)
+        new_caps = _build_capabilities(apps_ac)
         if self._capabilities != new_caps:
             self._capabilities = deepcopy(new_caps)
             _LOGGER.debug("Capabilities updated (in-memory): %s", self._capabilities)
 
-        return ac
+        dev_id = apps_ac["device"]["id"]
+        try:
+            devs = await self.api._req("GET", "/devices")
+        except RemoAuthError as e:
+            raise UpdateFailed("Unauthorized token") from e
+        except RemoConnectionError as e:
+            raise UpdateFailed(f"Connection error: {e}") from e
+
+        devs_brdg = next((d for d in devs if d.get("id") == dev_id), None)
+        if not devs_brdg:
+            raise UpdateFailed("Bridge Device not found")
+
+        return {"ac": apps_ac, "bridge":devs_brdg}
